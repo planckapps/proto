@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .utils = .{
-            .url = "https://gitlab.com/planckapps/utils/-/archive/v0.1.0/utils-v0.1.0.tar.gz",
-            .hash = "utils-0.1.0-Ldej_imwAQCWmvwRU-2Du79R7JEND3U5LB7aXtebWy_9",
+            .url = "https://github.com/planckapps/utils/archive/refs/tags/v0.1.0.tar.gz",
+            .hash = "utils-0.1.0-Ldej_iawAQCEgGJ9UuYGcgBIRe0LZv8lGbV-YA8b6mSv",
         },
     },
     .paths = .{
