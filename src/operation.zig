@@ -41,7 +41,6 @@ pub const Status = enum(u8) {
     }
 };
 
-
 pub const ErrorCode = enum(u16) {
     success = 1000,
 
@@ -224,7 +223,6 @@ pub const Attribute = union(enum) {
     }
 };
 
-
 pub const OperationTag = enum(u8) {
     Authenticate = 1,
     Logout = 2,
@@ -239,9 +237,11 @@ pub const OperationTag = enum(u8) {
     Range = 11,
     List = 12,
     NextSequence = 13,
+    Watch = 14,
 
     Reply = 50,
     BatchReply = 51,
+    WatchReply = 52,
 
     Create = 100,
     Drop = 101,
@@ -249,7 +249,6 @@ pub const OperationTag = enum(u8) {
 };
 
 pub const Operation = union(OperationTag) {
-    
     Authenticate: struct {
         uid: []const u8,
         key: []const u8,
@@ -258,48 +257,48 @@ pub const Operation = union(OperationTag) {
     Logout: void,
 
     Insert: struct {
-        store_ns: []const u8,  
-        payload: []const u8,  
-        auto_create: bool,  
+        store_ns: []const u8,
+        payload: []const u8,
+        auto_create: bool,
     },
 
     BatchInsert: struct {
         store_ns: []const u8,
-        values: [][]const u8,  
+        values: [][]const u8,
     },
 
     Read: struct {
         store_ns: []const u8,
-        id: u128, // Document ID
+        id: u128,
     },
 
     Update: struct {
         store_ns: []const u8,
-        id: u128,  
-        payload: []const u8,  
+        id: u128,
+        payload: []const u8,
     },
 
     Delete: struct {
         store_ns: []const u8,
-        id: ?u128,  
-        query_json: ?[]const u8,  
+        id: ?u128,
+        query_json: ?[]const u8,
     },
 
     Query: struct {
-        store_ns: []const u8,  
+        store_ns: []const u8,
         query_json: []const u8,
     },
 
     Aggregate: struct {
-        store_ns: []const u8,  
+        store_ns: []const u8,
         aggregate_json: []const u8,
     },
 
     Scan: struct {
-        store_ns: []const u8,  
-        start_key: ?u128,  
-        limit: u32,  
-        skip: u32,  
+        store_ns: []const u8,
+        start_key: ?u128,
+        limit: u32,
+        skip: u32,
     },
 
     Range: struct {
@@ -309,17 +308,23 @@ pub const Operation = union(OperationTag) {
     },
 
     List: struct {
-        doc_type: DocType,  
-        ns: ?[]const u8,  
+        doc_type: DocType,
+        ns: ?[]const u8,
         limit: ?u32,
         offset: ?u32,
     },
 
     NextSequence: struct {
-        name: []const u8,  
+        name: []const u8,
     },
 
-    
+    Watch: struct {
+        stores: [][]const u8,
+        since_lsn: u64,
+        max_wait_ms: u32,
+        max_records: u32,
+    },
+
     Reply: struct {
         status: Status,
         data: ?[]const u8,
@@ -327,9 +332,15 @@ pub const Operation = union(OperationTag) {
 
     BatchReply: struct {
         status: Status,
-        results: [][]const u8,  
+        results: [][]const u8,
     },
- 
+
+    WatchReply: struct {
+        status: Status,
+        high_lsn: u64,
+        records: [][]const u8,
+    },
+
     Create: struct {
         doc_type: DocType,
         ns: []const u8,
@@ -345,7 +356,6 @@ pub const Operation = union(OperationTag) {
 
     Flush: void,
 };
-
 
 pub const DocType = enum(u8) {
     Store = 2,
@@ -369,23 +379,24 @@ pub const FieldType = enum(u8) {
     Boolean = 8,
 };
 
-pub const StoreStatus = enum(u8) {
+ pub const StoreStatus = enum(u8) {
     active = 0,
     deleting = 1,
 };
 
-pub const Store = struct {
+ pub const Store = struct {
     id: u16,
-    store_id: u16,  
+    store_id: u16,
     ns: []const u8,
     description: ?[]const u8 = null,
     created_at: i64 = 0,
     status: StoreStatus = .active,
 };
 
+ 
 pub const Index = struct {
     id: u16,
-    store_id: u16,  
+    store_id: u16,
     ns: []const u8,
     field: []const u8,
     field_type: FieldType,
@@ -395,6 +406,7 @@ pub const Index = struct {
     index_path: []const u8 = "",
 };
 
+ 
 pub const StoreInfo = struct {
     store: Store,
     indexes: []Index,
@@ -406,14 +418,16 @@ const VLog = struct {
     created_at: i64,
 };
 
+ 
 pub const User = struct {
     id: u16,
     username: []const u8,
     password_hash: []const u8,
-    role: u8,  
+    role: u8,
     created_at: i64 = 0,
 };
 
+ 
 pub const Backup = struct {
     id: u16,
     name: []const u8,
@@ -423,6 +437,7 @@ pub const Backup = struct {
     description: ?[]const u8 = null,
 };
 
+ 
 pub const Schedule = struct {
     name: []const u8,
     task_type: []const u8,
@@ -436,18 +451,18 @@ pub const Schedule = struct {
     next_run_at: i64 = 0,
 };
 
-
+ 
 pub const NamespaceParts = struct {
     store: ?[]const u8,
     index: ?[]const u8,
 
-    pub fn deinit(self: *NamespaceParts, allocator: std.mem.Allocator) void {
+     pub fn deinit(self: *NamespaceParts, allocator: std.mem.Allocator) void {
         if (self.store) |s| allocator.free(s);
         if (self.index) |s| allocator.free(s);
     }
 };
 
-
+ 
 pub fn parseNamespace(allocator: std.mem.Allocator, ns: []const u8) !NamespaceParts {
     var parts = NamespaceParts{
         .store = null,
@@ -473,7 +488,7 @@ pub fn parseNamespace(allocator: std.mem.Allocator, ns: []const u8) !NamespacePa
     return parts;
 }
 
-
+ 
 pub fn validateNamespace(ns: []const u8, expected_type: DocType) !void {
     const part_count = std.mem.count(u8, ns, ".") + 1;
 
@@ -488,7 +503,6 @@ pub fn validateNamespace(ns: []const u8, expected_type: DocType) !void {
         .Sequence => if (part_count != 1) return error.InvalidSequenceNamespace,
     }
 }
-
 
 const testing = std.testing;
 
@@ -540,8 +554,10 @@ test "OperationTag wire values" {
     try testing.expectEqual(@as(u8, 3), @intFromEnum(OperationTag.Insert));
     try testing.expectEqual(@as(u8, 8), @intFromEnum(OperationTag.Query));
     try testing.expectEqual(@as(u8, 12), @intFromEnum(OperationTag.List));
+    try testing.expectEqual(@as(u8, 14), @intFromEnum(OperationTag.Watch));
     try testing.expectEqual(@as(u8, 50), @intFromEnum(OperationTag.Reply));
     try testing.expectEqual(@as(u8, 51), @intFromEnum(OperationTag.BatchReply));
+    try testing.expectEqual(@as(u8, 52), @intFromEnum(OperationTag.WatchReply));
     try testing.expectEqual(@as(u8, 100), @intFromEnum(OperationTag.Create));
     try testing.expectEqual(@as(u8, 102), @intFromEnum(OperationTag.Flush));
 }

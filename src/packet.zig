@@ -18,11 +18,11 @@ pub const Packet = struct {
 
     pub fn calcMsgSize(pck: *const Packet) usize {
         var size: usize = 0;
-        size += @sizeOf(u64); // checksum
-        size += @sizeOf(u32); // packet_length
-        size += @sizeOf(u32); // packet_id
-        size += @sizeOf(i64); // timestamp
-        size += 1; // op tag (u8)
+        size += @sizeOf(u64);
+        size += @sizeOf(u32);
+        size += @sizeOf(u32);
+        size += @sizeOf(i64);
+        size += 1;
         switch (pck.op) {
             .Authenticate => |data| {
                 size += 4 + @as(u32, @intCast(data.uid.len));
@@ -32,31 +32,31 @@ pub const Packet = struct {
             .Insert => |data| {
                 size += 4 + @as(u32, @intCast(data.store_ns.len));
                 size += 4 + @as(u32, @intCast(data.payload.len));
-                size += 1; // auto_create (u8)
+                size += 1;
             },
             .BatchInsert => |data| {
                 size += 4 + @as(u32, @intCast(data.store_ns.len));
-                size += 4; // count (u32)
+                size += 4;
                 for (data.values) |value| {
                     size += 4 + @as(u32, @intCast(value.len));
                 }
             },
             .Read => |data| {
                 size += 4 + @as(u32, @intCast(data.store_ns.len));
-                size += 16; // id (u128)
+                size += 16;
             },
             .Update => |data| {
                 size += 4 + @as(u32, @intCast(data.store_ns.len));
-                size += 16; // id (u128)
+                size += 16;
                 size += 4 + @as(u32, @intCast(data.payload.len));
             },
             .Delete => |data| {
                 size += 4 + @as(u32, @intCast(data.store_ns.len));
-                size += 1; // has_id (u8)
+                size += 1;
                 if (data.id) |_| {
-                    size += 16; // id (u128)
+                    size += 16;
                 }
-                size += 1; // has_query_json (u8)
+                size += 1;
                 if (data.query_json) |qj| {
                     size += 4 + @as(u32, @intCast(qj.len));
                 }
@@ -71,62 +71,79 @@ pub const Packet = struct {
             },
             .Scan => |data| {
                 size += 4 + @as(u32, @intCast(data.store_ns.len));
-                size += 1; // has_start_key (u8)
+                size += 1;
                 if (data.start_key) |_| {
-                    size += 16; // start_key (u128)
+                    size += 16;
                 }
-                size += 4; // limit (u32)
-                size += 4; // skip (u32)
+                size += 4;
+                size += 4;
             },
             .Range => |data| {
                 size += 4 + @as(u32, @intCast(data.store_ns.len));
-                size += 16; // start_key (u128)
-                size += 16; // end_key (u128)
+                size += 16;
+                size += 16;
             },
             .List => |data| {
-                size += 1; // doc_type (u8)
-                size += 1; // has_ns (u8)
+                size += 1;
+                size += 1;
                 if (data.ns) |ns| {
                     size += 4 + @as(u32, @intCast(ns.len));
                 }
-                size += 1; // has_limit (u8)
+                size += 1;
                 if (data.limit) |_| {
-                    size += 4; // limit (u32)
+                    size += 4;
                 }
-                size += 1; // has_offset (u8)
+                size += 1;
                 if (data.offset) |_| {
-                    size += 4; // offset (u32)
+                    size += 4;
                 }
             },
             .NextSequence => |data| {
                 size += 4 + @as(u32, @intCast(data.name.len)); // name string
             },
+            .Watch => |data| {
+                size += 4;
+                for (data.stores) |s| {
+                    size += 4 + @as(u32, @intCast(s.len));
+                }
+                size += 8;
+                size += 4;
+                size += 4;
+            },
+            .WatchReply => |data| {
+                size += 1;
+                size += 8;
+                size += 4;
+                for (data.records) |r| {
+                    size += 4 + @as(u32, @intCast(r.len));
+                }
+            },
             .Reply => |data| {
-                size += 1; // status (u8)
-                size += 1; // has_data (u8)
+                size += 1;
+                size += 1;
                 if (data.data) |d| {
                     size += 4 + @as(u32, @intCast(d.len));
                 }
             },
             .BatchReply => |data| {
-                size += 1; // status (u8)
-                size += 4; // count (u32)
+                size += 1;
+                size += 4;
                 for (data.results) |result| {
                     size += 4 + @as(u32, @intCast(result.len));
                 }
             },
             .Create => |data| {
-                size += 1; // doc_type (u8)
+                size += 1;
                 size += 4 + @as(u32, @intCast(data.ns.len));
                 size += 4 + @as(u32, @intCast(data.payload.len));
-                size += 1; // auto_create (u8)
-                size += 1; // has_metadata (u8)
+                size += 1;
+                size += 1;
                 if (data.metadata) |meta| {
                     size += 4 + @as(u32, @intCast(meta.len));
                 }
             },
             .Drop => |data| {
-                size += 1; // doc_type (u8)
+                size += 1;
                 size += 4 + @as(u32, @intCast(data.name.len));
             },
             .Flush => {},
@@ -170,6 +187,12 @@ pub const Packet = struct {
                     allocator.free(result);
                 }
                 allocator.free(data.results);
+            },
+            .Watch => |data| {
+                if (data.stores.len > 0) allocator.free(data.stores);
+            },
+            .WatchReply => |data| {
+                if (data.records.len > 0) allocator.free(data.records);
             },
             else => {},
         }
@@ -332,6 +355,25 @@ pub const Packet = struct {
             .NextSequence => |data| {
                 try w.writeString(data.name);
             },
+            .Watch => |data| {
+                const stores_count = @as(u32, @intCast(data.stores.len));
+                try w.writeInt(u32, stores_count, .little);
+                for (data.stores) |s| {
+                    try w.writeString(s);
+                }
+                try w.writeInt(u64, data.since_lsn, .little);
+                try w.writeInt(u32, data.max_wait_ms, .little);
+                try w.writeInt(u32, data.max_records, .little);
+            },
+            .WatchReply => |data| {
+                try w.writeInt(u8, @intFromEnum(data.status), .little);
+                try w.writeInt(u64, data.high_lsn, .little);
+                const records_count = @as(u32, @intCast(data.records.len));
+                try w.writeInt(u32, records_count, .little);
+                for (data.records) |r| {
+                    try w.writeString(r);
+                }
+            },
             .Reply => |data| {
                 try w.writeInt(u8, @intFromEnum(data.status), .little);
                 if (data.data) |d| {
@@ -469,15 +511,12 @@ pub const Packet = struct {
     fn deserializeOperation(allocator: Allocator, data: []const u8, offset: *usize) !Operation {
         const tag = try Packet.readBytes(data, offset, u8);
         return switch (tag) {
-            // Tag 1: Authenticate
             1 => {
                 const uid = try Packet.readString(allocator, data, offset);
                 const key = try Packet.readString(allocator, data, offset);
                 return Operation{ .Authenticate = .{ .uid = uid, .key = key } };
             },
-            // Tag 2: Logout
             2 => Operation.Logout,
-            // Tag 3: Insert
             3 => {
                 const store_ns = try Packet.readString(allocator, data, offset);
                 const payload = try Packet.readString(allocator, data, offset);
@@ -488,7 +527,6 @@ pub const Packet = struct {
                     .auto_create = auto_create,
                 } };
             },
-            // Tag 4: BatchInsert
             4 => {
                 const store_ns = try Packet.readString(allocator, data, offset);
                 const count = try Packet.readBytes(data, offset, u32);
@@ -501,13 +539,11 @@ pub const Packet = struct {
                     .values = values,
                 } };
             },
-            // Tag 5: Read
             5 => {
                 const store_ns = try Packet.readString(allocator, data, offset);
                 const id = try Packet.readBytes(data, offset, u128);
                 return Operation{ .Read = .{ .store_ns = store_ns, .id = id } };
             },
-            // Tag 6: Update
             6 => {
                 const store_ns = try Packet.readString(allocator, data, offset);
                 const id = try Packet.readBytes(data, offset, u128);
@@ -518,7 +554,6 @@ pub const Packet = struct {
                     .payload = payload,
                 } };
             },
-            // Tag 7: Delete
             7 => {
                 const store_ns = try Packet.readString(allocator, data, offset);
                 const has_id = try Packet.readBytes(data, offset, u8);
@@ -531,19 +566,16 @@ pub const Packet = struct {
                     .query_json = query_json,
                 } };
             },
-            // Tag 8: Query
             8 => {
                 const store_ns = try Packet.readString(allocator, data, offset);
                 const query_json = try Packet.readString(allocator, data, offset);
                 return Operation{ .Query = .{ .store_ns = store_ns, .query_json = query_json } };
             },
-            // Tag 9: Aggregate
             9 => {
                 const store_ns = try Packet.readString(allocator, data, offset);
                 const aggregate_json = try Packet.readString(allocator, data, offset);
                 return Operation{ .Aggregate = .{ .store_ns = store_ns, .aggregate_json = aggregate_json } };
             },
-            // Tag 10: Scan
             10 => {
                 const store_ns = try Packet.readString(allocator, data, offset);
                 const has_start_key = try Packet.readBytes(data, offset, u8);
@@ -557,7 +589,6 @@ pub const Packet = struct {
                     .skip = skip,
                 } };
             },
-            // Tag 11: Range
             11 => {
                 const store_ns = try Packet.readString(allocator, data, offset);
                 const start_key = try Packet.readBytes(data, offset, u128);
@@ -568,7 +599,6 @@ pub const Packet = struct {
                     .end_key = end_key,
                 } };
             },
-            // Tag 12: List
             12 => {
                 const doc_type_byte = try Packet.readBytes(data, offset, u8);
                 const doc_type = @as(DocType, @enumFromInt(doc_type_byte));
@@ -585,12 +615,26 @@ pub const Packet = struct {
                     .offset = offset_val,
                 } };
             },
-            // Tag 13: NextSequence
             13 => {
                 const name = try Packet.readString(allocator, data, offset);
                 return Operation{ .NextSequence = .{ .name = name } };
             },
-            // Tag 50: Reply
+            14 => {
+                const stores_count = try Packet.readBytes(data, offset, u32);
+                const stores = try allocator.alloc([]const u8, stores_count);
+                for (stores) |*s| {
+                    s.* = try Packet.readString(allocator, data, offset);
+                }
+                const since_lsn = try Packet.readBytes(data, offset, u64);
+                const max_wait_ms = try Packet.readBytes(data, offset, u32);
+                const max_records = try Packet.readBytes(data, offset, u32);
+                return Operation{ .Watch = .{
+                    .stores = stores,
+                    .since_lsn = since_lsn,
+                    .max_wait_ms = max_wait_ms,
+                    .max_records = max_records,
+                } };
+            },
             50 => {
                 const status_byte = try Packet.readBytes(data, offset, u8);
                 const status = @as(Status, @enumFromInt(status_byte));
@@ -598,7 +642,6 @@ pub const Packet = struct {
                 const reply_data = if (has_data == 1) try Packet.readString(allocator, data, offset) else null;
                 return Operation{ .Reply = .{ .status = status, .data = reply_data } };
             },
-            // Tag 51: BatchReply
             51 => {
                 const status_byte = try Packet.readBytes(data, offset, u8);
                 const status = @as(Status, @enumFromInt(status_byte));
@@ -609,8 +652,22 @@ pub const Packet = struct {
                 }
                 return Operation{ .BatchReply = .{ .status = status, .results = results } };
             },
+            52 => {
+                const status_byte = try Packet.readBytes(data, offset, u8);
+                const status = @as(Status, @enumFromInt(status_byte));
+                const high_lsn = try Packet.readBytes(data, offset, u64);
+                const count = try Packet.readBytes(data, offset, u32);
+                const records = try allocator.alloc([]const u8, count);
+                for (records) |*r| {
+                    r.* = try Packet.readString(allocator, data, offset);
+                }
+                return Operation{ .WatchReply = .{
+                    .status = status,
+                    .high_lsn = high_lsn,
+                    .records = records,
+                } };
+            },
 
-            // Admin operations (subset)
             100 => {
                 const doc_type_byte = try Packet.readBytes(data, offset, u8);
                 const doc_type = @as(DocType, @enumFromInt(doc_type_byte));
@@ -665,7 +722,6 @@ pub const Packet = struct {
     }
 };
 
-
 pub const SerializationError = error{
     BufferTooSmall,
     InvalidData,
@@ -676,7 +732,6 @@ const testing = std.testing;
 const expect = testing.expect;
 const expectEqual = testing.expectEqual;
 const expectEqualStrings = testing.expectEqualStrings;
-
 
 fn roundTrip(original: Packet) !void {
     const allocator = testing.allocator;
@@ -691,8 +746,7 @@ fn roundTrip(original: Packet) !void {
     try expectEqual(@intFromEnum(original.op), @intFromEnum(deserialized.op));
 }
 
-
-test "round-trip Authenticate" {
+test " Authenticate" {
     const pkt = Packet{
         .checksum = 17,
         .packet_length = 0,
@@ -711,7 +765,7 @@ test "round-trip Authenticate" {
     try expectEqualStrings("secret_key_123", d.op.Authenticate.key);
 }
 
-test "round-trip Logout" {
+test " Logout" {
     try roundTrip(Packet{
         .checksum = 19,
         .packet_length = 0,
@@ -721,7 +775,7 @@ test "round-trip Logout" {
     });
 }
 
-test "round-trip Insert" {
+test " Insert" {
     const pkt = Packet{
         .checksum = 6,
         .packet_length = 0,
@@ -740,7 +794,7 @@ test "round-trip Insert" {
     try expect(d.op.Insert.auto_create);
 }
 
-test "round-trip BatchInsert" {
+test " BatchInsert" {
     const allocator = testing.allocator;
     const values = try allocator.alloc([]const u8, 3);
     defer allocator.free(values);
@@ -763,7 +817,7 @@ test "round-trip BatchInsert" {
     try expectEqualStrings("doc1", d.op.BatchInsert.values[0]);
 }
 
-test "round-trip Read" {
+test " Read" {
     const pkt = Packet{
         .checksum = 8,
         .packet_length = 0,
@@ -781,7 +835,7 @@ test "round-trip Read" {
     try expectEqual(@as(u128, 0xDEADBEEF_CAFEBABE_12345678_9ABCDEF0), d.op.Read.id);
 }
 
-test "round-trip Update" {
+test " Update" {
     const pkt = Packet{
         .checksum = 9,
         .packet_length = 0,
@@ -800,7 +854,7 @@ test "round-trip Update" {
     try expectEqualStrings("updated_data", d.op.Update.payload);
 }
 
-test "round-trip Delete with id" {
+test " Delete with id" {
     const pkt = Packet{
         .checksum = 10,
         .packet_length = 0,
@@ -819,7 +873,7 @@ test "round-trip Delete with id" {
     try expect(d.op.Delete.query_json == null);
 }
 
-test "round-trip Delete with query_json" {
+test " Delete with query_json" {
     const pkt = Packet{
         .checksum = 11,
         .packet_length = 0,
@@ -838,7 +892,7 @@ test "round-trip Delete with query_json" {
     try expectEqualStrings("{\"status\":\"cancelled\"}", d.op.Delete.query_json.?);
 }
 
-test "round-trip Query" {
+test " Query" {
     const pkt = Packet{
         .checksum = 13,
         .packet_length = 0,
@@ -856,7 +910,7 @@ test "round-trip Query" {
     try expectEqualStrings("{\"age\":{\"$gt\":18}}", d.op.Query.query_json);
 }
 
-test "round-trip Aggregate" {
+test " Aggregate" {
     const pkt = Packet{
         .checksum = 14,
         .packet_length = 0,
@@ -874,7 +928,7 @@ test "round-trip Aggregate" {
     try expectEqualStrings("[{\"$sum\":\"amount\"}]", d.op.Aggregate.aggregate_json);
 }
 
-test "round-trip Scan with start_key" {
+test " Scan with start_key" {
     const pkt = Packet{
         .checksum = 15,
         .packet_length = 0,
@@ -894,7 +948,7 @@ test "round-trip Scan with start_key" {
     try expectEqual(@as(u32, 10), d.op.Scan.skip);
 }
 
-test "round-trip Scan without start_key" {
+test " Scan without start_key" {
     const pkt = Packet{
         .checksum = 16,
         .packet_length = 0,
@@ -912,7 +966,7 @@ test "round-trip Scan without start_key" {
     try expect(d.op.Scan.start_key == null);
 }
 
-test "round-trip Range with u128 keys" {
+test " Range with u128 keys" {
     const pkt = Packet{
         .checksum = 12,
         .packet_length = 0,
@@ -935,7 +989,7 @@ test "round-trip Range with u128 keys" {
     try expectEqual(@as(u128, 9999), d.op.Range.end_key);
 }
 
-test "round-trip List with optional fields" {
+test " List with optional fields" {
     const pkt = Packet{
         .checksum = 4,
         .packet_length = 0,
@@ -955,7 +1009,7 @@ test "round-trip List with optional fields" {
     try expect(d.op.List.ns == null);
 }
 
-test "round-trip Reply with data" {
+test " Reply with data" {
     const pkt = Packet{
         .checksum = 22222,
         .packet_length = 75,
@@ -974,7 +1028,7 @@ test "round-trip Reply with data" {
     try expectEqualStrings("response data", d.op.Reply.data.?);
 }
 
-test "round-trip Reply without data" {
+test " Reply without data" {
     const pkt = Packet{
         .checksum = 33333,
         .packet_length = 50,
@@ -992,7 +1046,7 @@ test "round-trip Reply without data" {
     try expect(d.op.Reply.data == null);
 }
 
-test "round-trip BatchReply" {
+test " BatchReply" {
     const allocator = testing.allocator;
     const results = try allocator.alloc([]const u8, 2);
     defer allocator.free(results);
@@ -1015,7 +1069,7 @@ test "round-trip BatchReply" {
     try expectEqualStrings("key_abc", d.op.BatchReply.results[0]);
 }
 
-test "round-trip Range boundary u128 values" {
+test " Range boundary u128 values" {
     const allocator = testing.allocator;
     const test_cases = [_][2]u128{
         .{ 0, 0 },
@@ -1040,6 +1094,181 @@ test "round-trip Range boundary u128 values" {
         try expectEqual(tc[0], d.op.Range.start_key);
         try expectEqual(tc[1], d.op.Range.end_key);
     }
+}
+
+// NOTE on free pattern: existing tests (e.g. BatchReply) only free the
+// OUTER slice on the deserialized side, NOT each inner string. That's
+// because readString returns slices that view the original buffer (it
+// takes an allocator but doesn't use it). Calling Packet.free on a
+// deserialized packet would attempt to free non-owned slices and panic.
+// Pre-existing quirk; we match the established pattern here.
+
+test " Watch empty stores" {
+    const allocator = testing.allocator;
+    const stores = try allocator.alloc([]const u8, 0);
+    defer allocator.free(stores);
+    const pkt = Packet{
+        .checksum = 100,
+        .packet_length = 0,
+        .packet_id = 40,
+        .timestamp = 100000,
+        .op = Operation{ .Watch = .{
+            .stores = stores,
+            .since_lsn = 0,
+            .max_wait_ms = 30_000,
+            .max_records = 256,
+        } },
+    };
+    var buf = try Buffer.init(allocator, pkt.calcMsgSize());
+    defer buf.deinit();
+    const serialized = try pkt.serialize(&buf);
+    const d = try Packet.deserialize(allocator, serialized);
+    defer allocator.free(d.op.Watch.stores);
+    try expectEqual(@as(usize, 0), d.op.Watch.stores.len);
+    try expectEqual(@as(u64, 0), d.op.Watch.since_lsn);
+    try expectEqual(@as(u32, 30_000), d.op.Watch.max_wait_ms);
+    try expectEqual(@as(u32, 256), d.op.Watch.max_records);
+}
+
+test " Watch single store" {
+    const allocator = testing.allocator;
+    const stores = try allocator.alloc([]const u8, 1);
+    defer allocator.free(stores);
+    stores[0] = "orders";
+    const pkt = Packet{
+        .checksum = 101,
+        .packet_length = 0,
+        .packet_id = 41,
+        .timestamp = 101000,
+        .op = Operation{ .Watch = .{
+            .stores = stores,
+            .since_lsn = 42,
+            .max_wait_ms = 5_000,
+            .max_records = 100,
+        } },
+    };
+    var buf = try Buffer.init(allocator, pkt.calcMsgSize());
+    defer buf.deinit();
+    const serialized = try pkt.serialize(&buf);
+    const d = try Packet.deserialize(allocator, serialized);
+    defer allocator.free(d.op.Watch.stores);
+    try expectEqual(@as(usize, 1), d.op.Watch.stores.len);
+    try expectEqualStrings("orders", d.op.Watch.stores[0]);
+    try expectEqual(@as(u64, 42), d.op.Watch.since_lsn);
+    try expectEqual(@as(u32, 5_000), d.op.Watch.max_wait_ms);
+    try expectEqual(@as(u32, 100), d.op.Watch.max_records);
+}
+
+test " Watch multiple stores" {
+    const allocator = testing.allocator;
+    const stores = try allocator.alloc([]const u8, 3);
+    defer allocator.free(stores);
+    stores[0] = "orders";
+    stores[1] = "payments";
+    stores[2] = "deliveries";
+    const pkt = Packet{
+        .checksum = 102,
+        .packet_length = 0,
+        .packet_id = 42,
+        .timestamp = 102000,
+        .op = Operation{
+            .Watch = .{
+                .stores = stores,
+                .since_lsn = 12345,
+                .max_wait_ms = 0, // server default
+                .max_records = 0, // server default
+            },
+        },
+    };
+    var buf = try Buffer.init(allocator, pkt.calcMsgSize());
+    defer buf.deinit();
+    const serialized = try pkt.serialize(&buf);
+    const d = try Packet.deserialize(allocator, serialized);
+    defer allocator.free(d.op.Watch.stores);
+    try expectEqual(@as(usize, 3), d.op.Watch.stores.len);
+    try expectEqualStrings("orders", d.op.Watch.stores[0]);
+    try expectEqualStrings("payments", d.op.Watch.stores[1]);
+    try expectEqualStrings("deliveries", d.op.Watch.stores[2]);
+    try expectEqual(@as(u64, 12345), d.op.Watch.since_lsn);
+}
+
+test " WatchReply empty (timeout case)" {
+    const allocator = testing.allocator;
+    const records = try allocator.alloc([]const u8, 0);
+    defer allocator.free(records);
+    const pkt = Packet{
+        .checksum = 103,
+        .packet_length = 0,
+        .packet_id = 43,
+        .timestamp = 103000,
+        .op = Operation{ .WatchReply = .{
+            .status = Status.ok,
+            .high_lsn = 99,
+            .records = records,
+        } },
+    };
+    var buf = try Buffer.init(allocator, pkt.calcMsgSize());
+    defer buf.deinit();
+    const serialized = try pkt.serialize(&buf);
+    const d = try Packet.deserialize(allocator, serialized);
+    defer allocator.free(d.op.WatchReply.records);
+    try expectEqual(Status.ok, d.op.WatchReply.status);
+    try expectEqual(@as(u64, 99), d.op.WatchReply.high_lsn);
+    try expectEqual(@as(usize, 0), d.op.WatchReply.records.len);
+}
+
+test " WatchReply with records" {
+    const allocator = testing.allocator;
+    const records = try allocator.alloc([]const u8, 2);
+    defer allocator.free(records);
+    records[0] = "frame_one_bytes\x00\x01\x02";
+    records[1] = "frame_two_longer_payload_bytes\xff\xfe";
+    const pkt = Packet{
+        .checksum = 104,
+        .packet_length = 0,
+        .packet_id = 44,
+        .timestamp = 104000,
+        .op = Operation{ .WatchReply = .{
+            .status = Status.ok,
+            .high_lsn = 200,
+            .records = records,
+        } },
+    };
+    var buf = try Buffer.init(allocator, pkt.calcMsgSize());
+    defer buf.deinit();
+    const serialized = try pkt.serialize(&buf);
+    const d = try Packet.deserialize(allocator, serialized);
+    defer allocator.free(d.op.WatchReply.records);
+    try expectEqual(Status.ok, d.op.WatchReply.status);
+    try expectEqual(@as(u64, 200), d.op.WatchReply.high_lsn);
+    try expectEqual(@as(usize, 2), d.op.WatchReply.records.len);
+    try expectEqualStrings("frame_one_bytes\x00\x01\x02", d.op.WatchReply.records[0]);
+    try expectEqualStrings("frame_two_longer_payload_bytes\xff\xfe", d.op.WatchReply.records[1]);
+}
+
+test " WatchReply not_found (rebootstrap signal)" {
+    const allocator = testing.allocator;
+    const records = try allocator.alloc([]const u8, 0);
+    defer allocator.free(records);
+    const pkt = Packet{
+        .checksum = 105,
+        .packet_length = 0,
+        .packet_id = 45,
+        .timestamp = 105000,
+        .op = Operation{ .WatchReply = .{
+            .status = Status.not_found,
+            .high_lsn = 1000,
+            .records = records,
+        } },
+    };
+    var buf = try Buffer.init(allocator, pkt.calcMsgSize());
+    defer buf.deinit();
+    const serialized = try pkt.serialize(&buf);
+    const d = try Packet.deserialize(allocator, serialized);
+    defer allocator.free(d.op.WatchReply.records);
+    try expectEqual(Status.not_found, d.op.WatchReply.status);
+    try expectEqual(@as(u64, 1000), d.op.WatchReply.high_lsn);
+    try expectEqual(@as(usize, 0), d.op.WatchReply.records.len);
 }
 
 test "error handling for invalid data" {
