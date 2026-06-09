@@ -26,6 +26,10 @@ pub const Status = enum(u8) {
     no_index_on_field = 5,
     document_too_large = 6,
     not_leader = 7,
+    /// Returned by idempotent ops (today: `Create` on `Store`/`Index`)
+    /// when the target already exists. Distinguishes "we did the work"
+    /// from "no-op, was already there" without surfacing an error.
+    already_exists = 8,
 
     pub fn toString(self: Status) []const u8 {
         return switch (self) {
@@ -37,6 +41,7 @@ pub const Status = enum(u8) {
             .no_index_on_field => "No index on field",
             .document_too_large => "Document exceeds size limit",
             .not_leader => "Not the leader node",
+            .already_exists => "Resource already exists",
         };
     }
 };
