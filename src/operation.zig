@@ -228,7 +228,18 @@ pub const Attribute = union(enum) {
     }
 };
 
+pub const StatsTag = enum(u8) {
+    WalStats = 1,
+    DbStats = 2,
+    IndexStats = 3,
+    VLogStats = 4,
+    GcStats = 5,
+    HistoryStats = 6,
+    AllStats = 255,
+};
+
 pub const OperationTag = enum(u8) {
+    // ---- Auth + data operations (1-14) ----
     Authenticate = 1,
     Logout = 2,
     Insert = 3,
@@ -244,13 +255,44 @@ pub const OperationTag = enum(u8) {
     NextSequence = 13,
     Watch = 14,
 
+    // ---- Response operations (50-52) ----
     Reply = 50,
     BatchReply = 51,
     WatchReply = 52,
 
+    // ---- DDL + admin operations (100-118) ----
     Create = 100,
     Drop = 101,
     Flush = 102,
+    Shutdown = 103,
+    SetMode = 104,
+    RegenerateKey = 105,
+    UpdateUser = 106,
+    Backup = 107,
+    Restore = 108,
+    Export = 109,
+    Import = 110,
+    Stats = 111,
+    GetConfig = 112,
+    SetConfig = 113,
+    Collect = 114,
+    Vlogs = 115,
+    Ping = 116,
+    Truncate = 117,
+    SaveStats = 118,
+
+    // ---- Auth token operations (119-122) ----
+    SaveToken = 119,
+    RevokeToken = 120,
+    RefreshToken = 121,
+    AuditLog = 122,
+
+    // ---- Replication (200) ----
+    ShipWal = 200,
+
+    // ---- Role management (201-202) ----
+    Demote = 201,
+    Promote = 202,
 };
 
 pub const Operation = union(OperationTag) {
@@ -274,18 +316,24 @@ pub const Operation = union(OperationTag) {
 
     Read: struct {
         store_ns: []const u8,
-        id: u128,
+        // Primary key of the target document (u128). Named `key` to
+        // match the on-the-wire BSON field engine queries return
+        // (`"key": "<32-char hex>"`). Same value, no encoding change.
+        key: u128,
     },
 
     Update: struct {
         store_ns: []const u8,
-        id: u128,
+        key: u128,
         payload: []const u8,
     },
 
     Delete: struct {
         store_ns: []const u8,
-        id: ?u128,
+        // Either `key` (delete that one doc) or `query_json` (delete
+        // every doc matching the filter) is non-null. The engine
+        // dispatches on which one is set.
+        key: ?u128,
         query_json: ?[]const u8,
     },
 
@@ -360,6 +408,112 @@ pub const Operation = union(OperationTag) {
     },
 
     Flush: void,
+
+    // ========== ADMIN OPERATIONS (103-118) ==========
+
+    Shutdown: void,
+
+    SetMode: struct {
+        online: bool,
+    },
+
+    RegenerateKey: struct {
+        uid: []const u8,
+    },
+
+    UpdateUser: struct {
+        uid: []const u8,
+        role: u8,
+    },
+
+    Backup: struct {
+        path: []const u8,
+    },
+
+    Restore: struct {
+        backup_path: []const u8,
+        target_path: []const u8,
+    },
+
+    Export: struct {
+        data: []const u8, // manifest YAML
+    },
+
+    Import: struct {
+        data: []const u8, // manifest YAML
+    },
+
+    Stats: struct { stat: StatsTag },
+
+    GetConfig: void,
+
+    SetConfig: struct {
+        data: []const u8,
+    },
+
+    Collect: struct { vlogs: []const u8 },
+
+    Vlogs: void,
+
+    Ping: void,
+
+    Truncate: void,
+
+    SaveStats: struct {
+        store_ns: []const u8,
+        data: []const u8,
+    },
+
+    // ========== AUTH TOKEN OPERATIONS (119-122) ==========
+
+    SaveToken: struct {
+        app: []const u8,
+        uid: []const u8,
+        provider: []const u8,
+        token: []const u8,
+        expires_at: i64,
+        claims: ?[]const u8,
+        role: []const u8,
+        client_ip: ?[]const u8,
+    },
+
+    RevokeToken: struct {
+        app: []const u8,
+        token: []const u8,
+    },
+
+    RefreshToken: struct {
+        app: []const u8,
+        old_token: []const u8,
+        refresh_token: []const u8,
+        provider: []const u8,
+    },
+
+    AuditLog: struct {
+        event: []const u8,
+        uid: ?[]const u8,
+        provider: ?[]const u8,
+        client_ip: ?[]const u8,
+        reason: ?[]const u8,
+        timestamp: i64,
+        app: []const u8,
+    },
+
+    // ========== REPLICATION (200) ==========
+
+    ShipWal: struct {
+        op_kind: u8,
+        store_ns: []const u8,
+        lsn: u64,
+        doc_id: u128,
+        timestamp: i64,
+        data: []const u8,
+    },
+
+    // ========== ROLE MANAGEMENT (201-202) ==========
+
+    Demote: void,
+    Promote: void,
 };
 
 pub const DocType = enum(u8) {

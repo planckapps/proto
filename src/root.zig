@@ -13,6 +13,7 @@ pub const Schedule = @import("operation.zig").Schedule;
 pub const DocType = @import("operation.zig").DocType;
 pub const FieldType = @import("operation.zig").FieldType;
 pub const ValueType = @import("operation.zig").ValueType;
+pub const StatsTag = @import("operation.zig").StatsTag;
 pub const parseNamespace = @import("operation.zig").parseNamespace;
 pub const NamespaceParts = @import("operation.zig").NamespaceParts;
 pub const Packet = @import("packet.zig").Packet;

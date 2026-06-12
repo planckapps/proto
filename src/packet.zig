@@ -5,6 +5,7 @@ const Status = @import("operation.zig").Status;
 const ValueType = @import("operation.zig").ValueType;
 const Attribute = @import("operation.zig").Attribute;
 const DocType = @import("operation.zig").DocType;
+const StatsTag = @import("operation.zig").StatsTag;
 const ArrayList = std.ArrayList;
 const Allocator = std.mem.Allocator;
 const Buffer = @import("utils").Buffer;
@@ -53,7 +54,7 @@ pub const Packet = struct {
             .Delete => |data| {
                 size += 4 + @as(u32, @intCast(data.store_ns.len));
                 size += 1;
-                if (data.id) |_| {
+                if (data.key) |_| {
                     size += 16;
                 }
                 size += 1;
@@ -147,6 +148,104 @@ pub const Packet = struct {
                 size += 4 + @as(u32, @intCast(data.name.len));
             },
             .Flush => {},
+            .Shutdown => {},
+            .SetMode => {
+                size += 1; // online (u8 bool)
+            },
+            .RegenerateKey => |data| {
+                size += 4 + @as(u32, @intCast(data.uid.len));
+            },
+            .UpdateUser => |data| {
+                size += 4 + @as(u32, @intCast(data.uid.len));
+                size += 1; // role (u8)
+            },
+            .Backup => |data| {
+                size += 4 + @as(u32, @intCast(data.path.len));
+            },
+            .Restore => |data| {
+                size += 4 + @as(u32, @intCast(data.backup_path.len));
+                size += 4 + @as(u32, @intCast(data.target_path.len));
+            },
+            .Export => |data| {
+                size += 4 + @as(u32, @intCast(data.data.len));
+            },
+            .Import => |data| {
+                size += 4 + @as(u32, @intCast(data.data.len));
+            },
+            .Stats => {
+                size += 1; // stat tag (u8)
+            },
+            .GetConfig => {},
+            .SetConfig => |data| {
+                size += 4 + @as(u32, @intCast(data.data.len));
+            },
+            .Collect => |data| {
+                size += 4 + @as(u32, @intCast(data.vlogs.len));
+            },
+            .Vlogs => {},
+            .Ping => {},
+            .Truncate => {},
+            .SaveStats => |data| {
+                size += 4 + @as(u32, @intCast(data.store_ns.len));
+                size += 4 + @as(u32, @intCast(data.data.len));
+            },
+            .SaveToken => |data| {
+                size += 4 + @as(u32, @intCast(data.app.len));
+                size += 4 + @as(u32, @intCast(data.uid.len));
+                size += 4 + @as(u32, @intCast(data.provider.len));
+                size += 4 + @as(u32, @intCast(data.token.len));
+                size += @sizeOf(i64); // expires_at
+                size += 1; // has_claims
+                if (data.claims) |c| {
+                    size += 4 + @as(u32, @intCast(c.len));
+                }
+                size += 4 + @as(u32, @intCast(data.role.len));
+                size += 1; // has_client_ip
+                if (data.client_ip) |ip| {
+                    size += 4 + @as(u32, @intCast(ip.len));
+                }
+            },
+            .RevokeToken => |data| {
+                size += 4 + @as(u32, @intCast(data.app.len));
+                size += 4 + @as(u32, @intCast(data.token.len));
+            },
+            .RefreshToken => |data| {
+                size += 4 + @as(u32, @intCast(data.app.len));
+                size += 4 + @as(u32, @intCast(data.old_token.len));
+                size += 4 + @as(u32, @intCast(data.refresh_token.len));
+                size += 4 + @as(u32, @intCast(data.provider.len));
+            },
+            .AuditLog => |data| {
+                size += 4 + @as(u32, @intCast(data.event.len));
+                size += 1; // has_uid
+                if (data.uid) |u| {
+                    size += 4 + @as(u32, @intCast(u.len));
+                }
+                size += 1; // has_provider
+                if (data.provider) |p| {
+                    size += 4 + @as(u32, @intCast(p.len));
+                }
+                size += 1; // has_client_ip
+                if (data.client_ip) |ip| {
+                    size += 4 + @as(u32, @intCast(ip.len));
+                }
+                size += 1; // has_reason
+                if (data.reason) |r| {
+                    size += 4 + @as(u32, @intCast(r.len));
+                }
+                size += @sizeOf(i64); // timestamp
+                size += 4 + @as(u32, @intCast(data.app.len));
+            },
+            .ShipWal => |data| {
+                size += 1; // op_kind (u8)
+                size += 4 + @as(u32, @intCast(data.store_ns.len));
+                size += @sizeOf(u64); // lsn
+                size += @sizeOf(u128); // doc_id
+                size += @sizeOf(i64); // timestamp
+                size += 4 + @as(u32, @intCast(data.data.len));
+            },
+            .Demote => {},
+            .Promote => {},
         }
         return size;
     }
@@ -193,6 +292,12 @@ pub const Packet = struct {
             },
             .WatchReply => |data| {
                 if (data.records.len > 0) allocator.free(data.records);
+            },
+            .Collect => |data| {
+                // `Collect.vlogs` is allocated by `deserializeOperation`
+                // (114-arm in deserializeOperation). Free here so callers
+                // don't have to thread it through every admin path.
+                if (data.vlogs.len > 0) allocator.free(data.vlogs);
             },
             else => {},
         }
@@ -285,18 +390,18 @@ pub const Packet = struct {
             },
             .Read => |data| {
                 try w.writeString(data.store_ns);
-                try w.writeInt(u128, data.id, .little);
+                try w.writeInt(u128, data.key, .little);
             },
             .Update => |data| {
                 try w.writeString(data.store_ns);
-                try w.writeInt(u128, data.id, .little);
+                try w.writeInt(u128, data.key, .little);
                 try w.writeString(data.payload);
             },
             .Delete => |data| {
                 try w.writeString(data.store_ns);
-                if (data.id) |id| {
+                if (data.key) |key| {
                     try w.writeInt(u8, 1, .little);
-                    try w.writeInt(u128, id, .little);
+                    try w.writeInt(u128, key, .little);
                 } else {
                     try w.writeInt(u8, 0, .little);
                 }
@@ -408,6 +513,117 @@ pub const Packet = struct {
                 try w.writeString(data.name);
             },
             .Flush => {},
+            .Shutdown => {},
+            .SetMode => |data| {
+                try w.writeInt(u8, if (data.online) 1 else 0, .little);
+            },
+            .RegenerateKey => |data| {
+                try w.writeString(data.uid);
+            },
+            .UpdateUser => |data| {
+                try w.writeString(data.uid);
+                try w.writeInt(u8, data.role, .little);
+            },
+            .Backup => |data| {
+                try w.writeString(data.path);
+            },
+            .Restore => |data| {
+                try w.writeString(data.backup_path);
+                try w.writeString(data.target_path);
+            },
+            .Export => |data| {
+                try w.writeString(data.data);
+            },
+            .Import => |data| {
+                try w.writeString(data.data);
+            },
+            .Stats => |data| {
+                try w.writeInt(u8, @intFromEnum(data.stat), .little);
+            },
+            .GetConfig => {},
+            .SetConfig => |data| {
+                try w.writeString(data.data);
+            },
+            .Collect => |data| {
+                try w.writeInt(u32, @intCast(data.vlogs.len), .little);
+                try w.writeAll(data.vlogs);
+            },
+            .Vlogs => {},
+            .Ping => {},
+            .Truncate => {},
+            .SaveStats => |data| {
+                try w.writeString(data.store_ns);
+                try w.writeString(data.data);
+            },
+            .SaveToken => |data| {
+                try w.writeString(data.app);
+                try w.writeString(data.uid);
+                try w.writeString(data.provider);
+                try w.writeString(data.token);
+                try w.writeInt(i64, data.expires_at, .little);
+                if (data.claims) |c| {
+                    try w.writeInt(u8, 1, .little);
+                    try w.writeString(c);
+                } else {
+                    try w.writeInt(u8, 0, .little);
+                }
+                try w.writeString(data.role);
+                if (data.client_ip) |ip| {
+                    try w.writeInt(u8, 1, .little);
+                    try w.writeString(ip);
+                } else {
+                    try w.writeInt(u8, 0, .little);
+                }
+            },
+            .RevokeToken => |data| {
+                try w.writeString(data.app);
+                try w.writeString(data.token);
+            },
+            .RefreshToken => |data| {
+                try w.writeString(data.app);
+                try w.writeString(data.old_token);
+                try w.writeString(data.refresh_token);
+                try w.writeString(data.provider);
+            },
+            .AuditLog => |data| {
+                try w.writeString(data.event);
+                if (data.uid) |u| {
+                    try w.writeInt(u8, 1, .little);
+                    try w.writeString(u);
+                } else {
+                    try w.writeInt(u8, 0, .little);
+                }
+                if (data.provider) |p| {
+                    try w.writeInt(u8, 1, .little);
+                    try w.writeString(p);
+                } else {
+                    try w.writeInt(u8, 0, .little);
+                }
+                if (data.client_ip) |ip| {
+                    try w.writeInt(u8, 1, .little);
+                    try w.writeString(ip);
+                } else {
+                    try w.writeInt(u8, 0, .little);
+                }
+                if (data.reason) |r| {
+                    try w.writeInt(u8, 1, .little);
+                    try w.writeString(r);
+                } else {
+                    try w.writeInt(u8, 0, .little);
+                }
+                try w.writeInt(i64, data.timestamp, .little);
+                try w.writeString(data.app);
+            },
+            .ShipWal => |data| {
+                try w.writeInt(u8, data.op_kind, .little);
+                try w.writeString(data.store_ns);
+                try w.writeInt(u64, data.lsn, .little);
+                try w.writeInt(u128, data.doc_id, .little);
+                try w.writeInt(i64, data.timestamp, .little);
+                try w.writeString(data.data);
+            },
+            .Demote => {},
+            .Promote => {},
         }
     }
 
@@ -541,28 +757,28 @@ pub const Packet = struct {
             },
             5 => {
                 const store_ns = try Packet.readString(allocator, data, offset);
-                const id = try Packet.readBytes(data, offset, u128);
-                return Operation{ .Read = .{ .store_ns = store_ns, .id = id } };
+                const key = try Packet.readBytes(data, offset, u128);
+                return Operation{ .Read = .{ .store_ns = store_ns, .key = key } };
             },
             6 => {
                 const store_ns = try Packet.readString(allocator, data, offset);
-                const id = try Packet.readBytes(data, offset, u128);
+                const key = try Packet.readBytes(data, offset, u128);
                 const payload = try Packet.readString(allocator, data, offset);
                 return Operation{ .Update = .{
                     .store_ns = store_ns,
-                    .id = id,
+                    .key = key,
                     .payload = payload,
                 } };
             },
             7 => {
                 const store_ns = try Packet.readString(allocator, data, offset);
-                const has_id = try Packet.readBytes(data, offset, u8);
-                const id = if (has_id == 1) try Packet.readBytes(data, offset, u128) else null;
+                const has_key = try Packet.readBytes(data, offset, u8);
+                const key = if (has_key == 1) try Packet.readBytes(data, offset, u128) else null;
                 const has_query_json = try Packet.readBytes(data, offset, u8);
                 const query_json = if (has_query_json == 1) try Packet.readString(allocator, data, offset) else null;
                 return Operation{ .Delete = .{
                     .store_ns = store_ns,
-                    .id = id,
+                    .key = key,
                     .query_json = query_json,
                 } };
             },
@@ -695,6 +911,153 @@ pub const Packet = struct {
             },
             102 => Operation.Flush,
 
+            // ---- Admin operations (103-118) ----
+            103 => Operation.Shutdown,
+            104 => {
+                const online = (try Packet.readBytes(data, offset, u8)) == 1;
+                return Operation{ .SetMode = .{ .online = online } };
+            },
+            105 => {
+                const uid = try Packet.readString(allocator, data, offset);
+                return Operation{ .RegenerateKey = .{ .uid = uid } };
+            },
+            106 => {
+                const uid = try Packet.readString(allocator, data, offset);
+                const role = try Packet.readBytes(data, offset, u8);
+                return Operation{ .UpdateUser = .{ .uid = uid, .role = role } };
+            },
+            107 => {
+                const path = try Packet.readString(allocator, data, offset);
+                return Operation{ .Backup = .{ .path = path } };
+            },
+            108 => {
+                const backup_path = try Packet.readString(allocator, data, offset);
+                const target_path = try Packet.readString(allocator, data, offset);
+                return Operation{ .Restore = .{ .backup_path = backup_path, .target_path = target_path } };
+            },
+            109 => {
+                const manifest_data = try Packet.readString(allocator, data, offset);
+                return Operation{ .Export = .{ .data = manifest_data } };
+            },
+            110 => {
+                const manifest_data = try Packet.readString(allocator, data, offset);
+                return Operation{ .Import = .{ .data = manifest_data } };
+            },
+            111 => {
+                const stat_byte = try Packet.readBytes(data, offset, u8);
+                const stat = @as(StatsTag, @enumFromInt(stat_byte));
+                return Operation{ .Stats = .{ .stat = stat } };
+            },
+            112 => Operation.GetConfig,
+            113 => {
+                const config_data = try Packet.readString(allocator, data, offset);
+                return Operation{ .SetConfig = .{ .data = config_data } };
+            },
+            114 => {
+                const count = try Packet.readBytes(data, offset, u32);
+                const vlogs = try allocator.alloc(u8, count);
+                for (vlogs) |*v| {
+                    v.* = try Packet.readBytes(data, offset, u8);
+                }
+                return Operation{ .Collect = .{ .vlogs = vlogs } };
+            },
+            115 => return Operation.Vlogs,
+            116 => return Operation.Ping,
+            117 => return Operation.Truncate,
+            118 => {
+                const store_ns = try Packet.readString(allocator, data, offset);
+                const stats_data = try Packet.readString(allocator, data, offset);
+                return Operation{ .SaveStats = .{
+                    .store_ns = store_ns,
+                    .data = stats_data,
+                } };
+            },
+
+            // ---- Auth token operations (119-122) ----
+            119 => {
+                const app = try Packet.readString(allocator, data, offset);
+                const uid = try Packet.readString(allocator, data, offset);
+                const provider = try Packet.readString(allocator, data, offset);
+                const token = try Packet.readString(allocator, data, offset);
+                const expires_at = try Packet.readBytes(data, offset, i64);
+                const has_claims = try Packet.readBytes(data, offset, u8);
+                const claims = if (has_claims == 1) try Packet.readString(allocator, data, offset) else null;
+                const role = try Packet.readString(allocator, data, offset);
+                const has_ip = try Packet.readBytes(data, offset, u8);
+                const client_ip = if (has_ip == 1) try Packet.readString(allocator, data, offset) else null;
+                return Operation{ .SaveToken = .{
+                    .app = app,
+                    .uid = uid,
+                    .provider = provider,
+                    .token = token,
+                    .expires_at = expires_at,
+                    .claims = claims,
+                    .role = role,
+                    .client_ip = client_ip,
+                } };
+            },
+            120 => {
+                const app = try Packet.readString(allocator, data, offset);
+                const token = try Packet.readString(allocator, data, offset);
+                return Operation{ .RevokeToken = .{ .app = app, .token = token } };
+            },
+            121 => {
+                const app = try Packet.readString(allocator, data, offset);
+                const old_token = try Packet.readString(allocator, data, offset);
+                const refresh_token = try Packet.readString(allocator, data, offset);
+                const provider = try Packet.readString(allocator, data, offset);
+                return Operation{ .RefreshToken = .{
+                    .app = app,
+                    .old_token = old_token,
+                    .refresh_token = refresh_token,
+                    .provider = provider,
+                } };
+            },
+            122 => {
+                const event = try Packet.readString(allocator, data, offset);
+                const has_uid = try Packet.readBytes(data, offset, u8);
+                const uid = if (has_uid == 1) try Packet.readString(allocator, data, offset) else null;
+                const has_provider = try Packet.readBytes(data, offset, u8);
+                const provider = if (has_provider == 1) try Packet.readString(allocator, data, offset) else null;
+                const has_ip = try Packet.readBytes(data, offset, u8);
+                const client_ip = if (has_ip == 1) try Packet.readString(allocator, data, offset) else null;
+                const has_reason = try Packet.readBytes(data, offset, u8);
+                const reason = if (has_reason == 1) try Packet.readString(allocator, data, offset) else null;
+                const timestamp = try Packet.readBytes(data, offset, i64);
+                const app = try Packet.readString(allocator, data, offset);
+                return Operation{ .AuditLog = .{
+                    .event = event,
+                    .uid = uid,
+                    .provider = provider,
+                    .client_ip = client_ip,
+                    .reason = reason,
+                    .timestamp = timestamp,
+                    .app = app,
+                } };
+            },
+
+            // ---- Replication (200) ----
+            200 => {
+                const op_kind = try Packet.readBytes(data, offset, u8);
+                const store_ns = try Packet.readString(allocator, data, offset);
+                const lsn = try Packet.readBytes(data, offset, u64);
+                const doc_id = try Packet.readBytes(data, offset, u128);
+                const timestamp = try Packet.readBytes(data, offset, i64);
+                const ship_data = try Packet.readString(allocator, data, offset);
+                return Operation{ .ShipWal = .{
+                    .op_kind = op_kind,
+                    .store_ns = store_ns,
+                    .lsn = lsn,
+                    .doc_id = doc_id,
+                    .timestamp = timestamp,
+                    .data = ship_data,
+                } };
+            },
+
+            // ---- Role management (201-202) ----
+            201 => return Operation.Demote,
+            202 => return Operation.Promote,
+
             else => SerializationError.InvalidData,
         };
     }
@@ -823,7 +1186,7 @@ test " Read" {
         .packet_length = 0,
         .packet_id = 17,
         .timestamp = 8000,
-        .op = Operation{ .Read = .{ .store_ns = "users", .id = 0xDEADBEEF_CAFEBABE_12345678_9ABCDEF0 } },
+        .op = Operation{ .Read = .{ .store_ns = "users", .key = 0xDEADBEEF_CAFEBABE_12345678_9ABCDEF0 } },
     };
     try roundTrip(pkt);
     const allocator = testing.allocator;
@@ -832,7 +1195,7 @@ test " Read" {
     const serialized = try pkt.serialize(&buf);
     const d = try Packet.deserialize(allocator, serialized);
     defer Packet.free(allocator, d);
-    try expectEqual(@as(u128, 0xDEADBEEF_CAFEBABE_12345678_9ABCDEF0), d.op.Read.id);
+    try expectEqual(@as(u128, 0xDEADBEEF_CAFEBABE_12345678_9ABCDEF0), d.op.Read.key);
 }
 
 test " Update" {
@@ -841,7 +1204,7 @@ test " Update" {
         .packet_length = 0,
         .packet_id = 18,
         .timestamp = 9000,
-        .op = Operation{ .Update = .{ .store_ns = "users", .id = 42, .payload = "updated_data" } },
+        .op = Operation{ .Update = .{ .store_ns = "users", .key = 42, .payload = "updated_data" } },
     };
     try roundTrip(pkt);
     const allocator = testing.allocator;
@@ -850,17 +1213,17 @@ test " Update" {
     const serialized = try pkt.serialize(&buf);
     const d = try Packet.deserialize(allocator, serialized);
     defer Packet.free(allocator, d);
-    try expectEqual(@as(u128, 42), d.op.Update.id);
+    try expectEqual(@as(u128, 42), d.op.Update.key);
     try expectEqualStrings("updated_data", d.op.Update.payload);
 }
 
-test " Delete with id" {
+test " Delete with key" {
     const pkt = Packet{
         .checksum = 10,
         .packet_length = 0,
         .packet_id = 19,
         .timestamp = 10000,
-        .op = Operation{ .Delete = .{ .store_ns = "users", .id = 99, .query_json = null } },
+        .op = Operation{ .Delete = .{ .store_ns = "users", .key = 99, .query_json = null } },
     };
     try roundTrip(pkt);
     const allocator = testing.allocator;
@@ -869,7 +1232,7 @@ test " Delete with id" {
     const serialized = try pkt.serialize(&buf);
     const d = try Packet.deserialize(allocator, serialized);
     defer Packet.free(allocator, d);
-    try expectEqual(@as(u128, 99), d.op.Delete.id.?);
+    try expectEqual(@as(u128, 99), d.op.Delete.key.?);
     try expect(d.op.Delete.query_json == null);
 }
 
@@ -879,7 +1242,7 @@ test " Delete with query_json" {
         .packet_length = 0,
         .packet_id = 20,
         .timestamp = 11000,
-        .op = Operation{ .Delete = .{ .store_ns = "orders", .id = null, .query_json = "{\"status\":\"cancelled\"}" } },
+        .op = Operation{ .Delete = .{ .store_ns = "orders", .key = null, .query_json = "{\"status\":\"cancelled\"}" } },
     };
     try roundTrip(pkt);
     const allocator = testing.allocator;
@@ -888,7 +1251,7 @@ test " Delete with query_json" {
     const serialized = try pkt.serialize(&buf);
     const d = try Packet.deserialize(allocator, serialized);
     defer Packet.free(allocator, d);
-    try expect(d.op.Delete.id == null);
+    try expect(d.op.Delete.key == null);
     try expectEqualStrings("{\"status\":\"cancelled\"}", d.op.Delete.query_json.?);
 }
 
@@ -1286,4 +1649,561 @@ test "deserialize truncated header" {
     const allocator = testing.allocator;
     var short = [_]u8{0} ** 20;
     try testing.expectError(SerializationError.InvalidData, Packet.deserialize(allocator, &short));
+}
+
+// =============================================================
+// Admin Operation tests (formerly the protoa crate)
+//
+// These exercise every admin variant added when protoa merged into
+// proto. The first block locks down on-the-wire tag values: a typo
+// during the merge would shift one and break workbench <-> planck,
+// replication, or saved audit logs. The remaining tests round-trip
+// each variant's payload so a field-order change in the union or
+// switch arm gets caught here, not in production.
+// =============================================================
+
+test "admin OperationTag values match wire protocol" {
+    // Shared with the public proto surface (1-2, 50-51, 100-102)
+    try expectEqual(@as(u8, 1), @intFromEnum(@import("operation.zig").OperationTag.Authenticate));
+    try expectEqual(@as(u8, 2), @intFromEnum(@import("operation.zig").OperationTag.Logout));
+    try expectEqual(@as(u8, 50), @intFromEnum(@import("operation.zig").OperationTag.Reply));
+    try expectEqual(@as(u8, 51), @intFromEnum(@import("operation.zig").OperationTag.BatchReply));
+    try expectEqual(@as(u8, 100), @intFromEnum(@import("operation.zig").OperationTag.Create));
+    try expectEqual(@as(u8, 101), @intFromEnum(@import("operation.zig").OperationTag.Drop));
+    try expectEqual(@as(u8, 102), @intFromEnum(@import("operation.zig").OperationTag.Flush));
+
+    // Admin ops (103-118)
+    try expectEqual(@as(u8, 103), @intFromEnum(@import("operation.zig").OperationTag.Shutdown));
+    try expectEqual(@as(u8, 104), @intFromEnum(@import("operation.zig").OperationTag.SetMode));
+    try expectEqual(@as(u8, 105), @intFromEnum(@import("operation.zig").OperationTag.RegenerateKey));
+    try expectEqual(@as(u8, 106), @intFromEnum(@import("operation.zig").OperationTag.UpdateUser));
+    try expectEqual(@as(u8, 107), @intFromEnum(@import("operation.zig").OperationTag.Backup));
+    try expectEqual(@as(u8, 108), @intFromEnum(@import("operation.zig").OperationTag.Restore));
+    try expectEqual(@as(u8, 109), @intFromEnum(@import("operation.zig").OperationTag.Export));
+    try expectEqual(@as(u8, 110), @intFromEnum(@import("operation.zig").OperationTag.Import));
+    try expectEqual(@as(u8, 111), @intFromEnum(@import("operation.zig").OperationTag.Stats));
+    try expectEqual(@as(u8, 112), @intFromEnum(@import("operation.zig").OperationTag.GetConfig));
+    try expectEqual(@as(u8, 113), @intFromEnum(@import("operation.zig").OperationTag.SetConfig));
+    try expectEqual(@as(u8, 114), @intFromEnum(@import("operation.zig").OperationTag.Collect));
+    try expectEqual(@as(u8, 115), @intFromEnum(@import("operation.zig").OperationTag.Vlogs));
+    try expectEqual(@as(u8, 116), @intFromEnum(@import("operation.zig").OperationTag.Ping));
+    try expectEqual(@as(u8, 117), @intFromEnum(@import("operation.zig").OperationTag.Truncate));
+    try expectEqual(@as(u8, 118), @intFromEnum(@import("operation.zig").OperationTag.SaveStats));
+
+    // Auth-token ops (119-122)
+    try expectEqual(@as(u8, 119), @intFromEnum(@import("operation.zig").OperationTag.SaveToken));
+    try expectEqual(@as(u8, 120), @intFromEnum(@import("operation.zig").OperationTag.RevokeToken));
+    try expectEqual(@as(u8, 121), @intFromEnum(@import("operation.zig").OperationTag.RefreshToken));
+    try expectEqual(@as(u8, 122), @intFromEnum(@import("operation.zig").OperationTag.AuditLog));
+
+    // Replication (200) + role mgmt (201-202)
+    try expectEqual(@as(u8, 200), @intFromEnum(@import("operation.zig").OperationTag.ShipWal));
+    try expectEqual(@as(u8, 201), @intFromEnum(@import("operation.zig").OperationTag.Demote));
+    try expectEqual(@as(u8, 202), @intFromEnum(@import("operation.zig").OperationTag.Promote));
+}
+
+test " Shutdown" {
+    try roundTrip(Packet{
+        .checksum = 1,
+        .packet_length = 0,
+        .packet_id = 1,
+        .timestamp = 1000,
+        .op = Operation.Shutdown,
+    });
+}
+
+test " Ping" {
+    try roundTrip(Packet{
+        .checksum = 2,
+        .packet_length = 0,
+        .packet_id = 2,
+        .timestamp = 2000,
+        .op = Operation.Ping,
+    });
+}
+
+test " Truncate" {
+    try roundTrip(Packet{
+        .checksum = 3,
+        .packet_length = 0,
+        .packet_id = 3,
+        .timestamp = 3000,
+        .op = Operation.Truncate,
+    });
+}
+
+test " GetConfig" {
+    try roundTrip(Packet{
+        .checksum = 4,
+        .packet_length = 0,
+        .packet_id = 4,
+        .timestamp = 4000,
+        .op = Operation.GetConfig,
+    });
+}
+
+test " Vlogs" {
+    try roundTrip(Packet{
+        .checksum = 5,
+        .packet_length = 0,
+        .packet_id = 5,
+        .timestamp = 5000,
+        .op = Operation.Vlogs,
+    });
+}
+
+test " Demote" {
+    try roundTrip(Packet{
+        .checksum = 6,
+        .packet_length = 0,
+        .packet_id = 6,
+        .timestamp = 6000,
+        .op = Operation.Demote,
+    });
+}
+
+test " Promote" {
+    try roundTrip(Packet{
+        .checksum = 7,
+        .packet_length = 0,
+        .packet_id = 7,
+        .timestamp = 7000,
+        .op = Operation.Promote,
+    });
+}
+
+test " SetMode online=true" {
+    const pkt = Packet{
+        .checksum = 10,
+        .packet_length = 0,
+        .packet_id = 10,
+        .timestamp = 10_000,
+        .op = Operation{ .SetMode = .{ .online = true } },
+    };
+    try roundTrip(pkt);
+    const allocator = testing.allocator;
+    var buf = try Buffer.init(allocator, pkt.calcMsgSize());
+    defer buf.deinit();
+    const serialized = try pkt.serialize(&buf);
+    const d = try Packet.deserialize(allocator, serialized);
+    defer Packet.free(allocator, d);
+    try expect(d.op.SetMode.online);
+}
+
+test " SetMode online=false" {
+    const pkt = Packet{
+        .checksum = 11,
+        .packet_length = 0,
+        .packet_id = 11,
+        .timestamp = 11_000,
+        .op = Operation{ .SetMode = .{ .online = false } },
+    };
+    try roundTrip(pkt);
+    const allocator = testing.allocator;
+    var buf = try Buffer.init(allocator, pkt.calcMsgSize());
+    defer buf.deinit();
+    const serialized = try pkt.serialize(&buf);
+    const d = try Packet.deserialize(allocator, serialized);
+    defer Packet.free(allocator, d);
+    try expect(!d.op.SetMode.online);
+}
+
+test " RegenerateKey" {
+    const pkt = Packet{
+        .checksum = 12,
+        .packet_length = 0,
+        .packet_id = 12,
+        .timestamp = 12_000,
+        .op = Operation{ .RegenerateKey = .{ .uid = "admin" } },
+    };
+    try roundTrip(pkt);
+    const allocator = testing.allocator;
+    var buf = try Buffer.init(allocator, pkt.calcMsgSize());
+    defer buf.deinit();
+    const serialized = try pkt.serialize(&buf);
+    const d = try Packet.deserialize(allocator, serialized);
+    defer Packet.free(allocator, d);
+    try expectEqualStrings("admin", d.op.RegenerateKey.uid);
+}
+
+test " UpdateUser" {
+    const pkt = Packet{
+        .checksum = 13,
+        .packet_length = 0,
+        .packet_id = 13,
+        .timestamp = 13_000,
+        .op = Operation{ .UpdateUser = .{ .uid = "alice", .role = 42 } },
+    };
+    try roundTrip(pkt);
+    const allocator = testing.allocator;
+    var buf = try Buffer.init(allocator, pkt.calcMsgSize());
+    defer buf.deinit();
+    const serialized = try pkt.serialize(&buf);
+    const d = try Packet.deserialize(allocator, serialized);
+    defer Packet.free(allocator, d);
+    try expectEqualStrings("alice", d.op.UpdateUser.uid);
+    try expectEqual(@as(u8, 42), d.op.UpdateUser.role);
+}
+
+test " Backup" {
+    const pkt = Packet{
+        .checksum = 14,
+        .packet_length = 0,
+        .packet_id = 14,
+        .timestamp = 14_000,
+        .op = Operation{ .Backup = .{ .path = "/var/backups/2026-06.tar" } },
+    };
+    try roundTrip(pkt);
+    const allocator = testing.allocator;
+    var buf = try Buffer.init(allocator, pkt.calcMsgSize());
+    defer buf.deinit();
+    const serialized = try pkt.serialize(&buf);
+    const d = try Packet.deserialize(allocator, serialized);
+    defer Packet.free(allocator, d);
+    try expectEqualStrings("/var/backups/2026-06.tar", d.op.Backup.path);
+}
+
+test " Restore" {
+    const pkt = Packet{
+        .checksum = 15,
+        .packet_length = 0,
+        .packet_id = 15,
+        .timestamp = 15_000,
+        .op = Operation{ .Restore = .{
+            .backup_path = "/var/backups/2026-06.tar",
+            .target_path = "/var/lib/planck/restored",
+        } },
+    };
+    try roundTrip(pkt);
+    const allocator = testing.allocator;
+    var buf = try Buffer.init(allocator, pkt.calcMsgSize());
+    defer buf.deinit();
+    const serialized = try pkt.serialize(&buf);
+    const d = try Packet.deserialize(allocator, serialized);
+    defer Packet.free(allocator, d);
+    try expectEqualStrings("/var/backups/2026-06.tar", d.op.Restore.backup_path);
+    try expectEqualStrings("/var/lib/planck/restored", d.op.Restore.target_path);
+}
+
+test " Export" {
+    const yaml = "store: products\nformat: bson\n";
+    const pkt = Packet{
+        .checksum = 16,
+        .packet_length = 0,
+        .packet_id = 16,
+        .timestamp = 16_000,
+        .op = Operation{ .Export = .{ .data = yaml } },
+    };
+    try roundTrip(pkt);
+    const allocator = testing.allocator;
+    var buf = try Buffer.init(allocator, pkt.calcMsgSize());
+    defer buf.deinit();
+    const serialized = try pkt.serialize(&buf);
+    const d = try Packet.deserialize(allocator, serialized);
+    defer Packet.free(allocator, d);
+    try expectEqualStrings(yaml, d.op.Export.data);
+}
+
+test " Import" {
+    const yaml = "store: categories\nformat: json\n";
+    const pkt = Packet{
+        .checksum = 17,
+        .packet_length = 0,
+        .packet_id = 17,
+        .timestamp = 17_000,
+        .op = Operation{ .Import = .{ .data = yaml } },
+    };
+    try roundTrip(pkt);
+    const allocator = testing.allocator;
+    var buf = try Buffer.init(allocator, pkt.calcMsgSize());
+    defer buf.deinit();
+    const serialized = try pkt.serialize(&buf);
+    const d = try Packet.deserialize(allocator, serialized);
+    defer Packet.free(allocator, d);
+    try expectEqualStrings(yaml, d.op.Import.data);
+}
+
+test " Stats - covers every StatsTag" {
+    const tags = [_]StatsTag{ .WalStats, .DbStats, .IndexStats, .VLogStats, .GcStats, .HistoryStats, .AllStats };
+    for (tags) |tag| {
+        const pkt = Packet{
+            .checksum = 18,
+            .packet_length = 0,
+            .packet_id = 18,
+            .timestamp = 18_000,
+            .op = Operation{ .Stats = .{ .stat = tag } },
+        };
+        try roundTrip(pkt);
+        const allocator = testing.allocator;
+        var buf = try Buffer.init(allocator, pkt.calcMsgSize());
+        defer buf.deinit();
+        const serialized = try pkt.serialize(&buf);
+        const d = try Packet.deserialize(allocator, serialized);
+        defer Packet.free(allocator, d);
+        try expectEqual(tag, d.op.Stats.stat);
+    }
+}
+
+test " SetConfig" {
+    // Realistic shape: a small BSON-ish blob (just bytes for the test).
+    const config = "\x10\x00\x00\x00buffers\x00";
+    const pkt = Packet{
+        .checksum = 19,
+        .packet_length = 0,
+        .packet_id = 19,
+        .timestamp = 19_000,
+        .op = Operation{ .SetConfig = .{ .data = config } },
+    };
+    try roundTrip(pkt);
+    const allocator = testing.allocator;
+    var buf = try Buffer.init(allocator, pkt.calcMsgSize());
+    defer buf.deinit();
+    const serialized = try pkt.serialize(&buf);
+    const d = try Packet.deserialize(allocator, serialized);
+    defer Packet.free(allocator, d);
+    try expectEqualStrings(config, d.op.SetConfig.data);
+}
+
+test " Collect" {
+    const vlogs = "\x01\x02\x03\x04";
+    const pkt = Packet{
+        .checksum = 20,
+        .packet_length = 0,
+        .packet_id = 20,
+        .timestamp = 20_000,
+        .op = Operation{ .Collect = .{ .vlogs = vlogs } },
+    };
+    try roundTrip(pkt);
+    const allocator = testing.allocator;
+    var buf = try Buffer.init(allocator, pkt.calcMsgSize());
+    defer buf.deinit();
+    const serialized = try pkt.serialize(&buf);
+    const d = try Packet.deserialize(allocator, serialized);
+    defer Packet.free(allocator, d);
+    try expectEqualStrings(vlogs, d.op.Collect.vlogs);
+}
+
+test " SaveStats" {
+    const pkt = Packet{
+        .checksum = 21,
+        .packet_length = 0,
+        .packet_id = 21,
+        .timestamp = 21_000,
+        .op = Operation{ .SaveStats = .{
+            .store_ns = "products",
+            .data = "{\"docs\":42}",
+        } },
+    };
+    try roundTrip(pkt);
+    const allocator = testing.allocator;
+    var buf = try Buffer.init(allocator, pkt.calcMsgSize());
+    defer buf.deinit();
+    const serialized = try pkt.serialize(&buf);
+    const d = try Packet.deserialize(allocator, serialized);
+    defer Packet.free(allocator, d);
+    try expectEqualStrings("products", d.op.SaveStats.store_ns);
+    try expectEqualStrings("{\"docs\":42}", d.op.SaveStats.data);
+}
+
+test " SaveToken with claims + client_ip" {
+    const pkt = Packet{
+        .checksum = 22,
+        .packet_length = 0,
+        .packet_id = 22,
+        .timestamp = 22_000,
+        .op = Operation{ .SaveToken = .{
+            .app = "pizzaqsr",
+            .uid = "user@example.com",
+            .provider = "google",
+            .token = "eyJhbGciOi...",
+            .expires_at = 1_700_000_000_000,
+            .claims = "{\"role\":\"customer\"}",
+            .role = "customer",
+            .client_ip = "10.0.0.1",
+        } },
+    };
+    try roundTrip(pkt);
+    const allocator = testing.allocator;
+    var buf = try Buffer.init(allocator, pkt.calcMsgSize());
+    defer buf.deinit();
+    const serialized = try pkt.serialize(&buf);
+    const d = try Packet.deserialize(allocator, serialized);
+    defer Packet.free(allocator, d);
+    try expectEqualStrings("pizzaqsr", d.op.SaveToken.app);
+    try expectEqualStrings("user@example.com", d.op.SaveToken.uid);
+    try expectEqualStrings("google", d.op.SaveToken.provider);
+    try expectEqualStrings("eyJhbGciOi...", d.op.SaveToken.token);
+    try expectEqual(@as(i64, 1_700_000_000_000), d.op.SaveToken.expires_at);
+    try expect(d.op.SaveToken.claims != null);
+    try expectEqualStrings("{\"role\":\"customer\"}", d.op.SaveToken.claims.?);
+    try expectEqualStrings("customer", d.op.SaveToken.role);
+    try expect(d.op.SaveToken.client_ip != null);
+    try expectEqualStrings("10.0.0.1", d.op.SaveToken.client_ip.?);
+}
+
+test " SaveToken without claims or client_ip" {
+    const pkt = Packet{
+        .checksum = 23,
+        .packet_length = 0,
+        .packet_id = 23,
+        .timestamp = 23_000,
+        .op = Operation{ .SaveToken = .{
+            .app = "pizzaqsr",
+            .uid = "user@example.com",
+            .provider = "google",
+            .token = "eyJhbGciOi...",
+            .expires_at = 1_700_000_000_000,
+            .claims = null,
+            .role = "customer",
+            .client_ip = null,
+        } },
+    };
+    try roundTrip(pkt);
+    const allocator = testing.allocator;
+    var buf = try Buffer.init(allocator, pkt.calcMsgSize());
+    defer buf.deinit();
+    const serialized = try pkt.serialize(&buf);
+    const d = try Packet.deserialize(allocator, serialized);
+    defer Packet.free(allocator, d);
+    try expect(d.op.SaveToken.claims == null);
+    try expect(d.op.SaveToken.client_ip == null);
+}
+
+test " RevokeToken" {
+    const pkt = Packet{
+        .checksum = 24,
+        .packet_length = 0,
+        .packet_id = 24,
+        .timestamp = 24_000,
+        .op = Operation{ .RevokeToken = .{
+            .app = "pizzaqsr",
+            .token = "eyJhbGciOi...",
+        } },
+    };
+    try roundTrip(pkt);
+    const allocator = testing.allocator;
+    var buf = try Buffer.init(allocator, pkt.calcMsgSize());
+    defer buf.deinit();
+    const serialized = try pkt.serialize(&buf);
+    const d = try Packet.deserialize(allocator, serialized);
+    defer Packet.free(allocator, d);
+    try expectEqualStrings("pizzaqsr", d.op.RevokeToken.app);
+    try expectEqualStrings("eyJhbGciOi...", d.op.RevokeToken.token);
+}
+
+test " RefreshToken" {
+    const pkt = Packet{
+        .checksum = 25,
+        .packet_length = 0,
+        .packet_id = 25,
+        .timestamp = 25_000,
+        .op = Operation{ .RefreshToken = .{
+            .app = "pizzaqsr",
+            .old_token = "old-jwt",
+            .refresh_token = "refresh-jwt",
+            .provider = "google",
+        } },
+    };
+    try roundTrip(pkt);
+    const allocator = testing.allocator;
+    var buf = try Buffer.init(allocator, pkt.calcMsgSize());
+    defer buf.deinit();
+    const serialized = try pkt.serialize(&buf);
+    const d = try Packet.deserialize(allocator, serialized);
+    defer Packet.free(allocator, d);
+    try expectEqualStrings("pizzaqsr", d.op.RefreshToken.app);
+    try expectEqualStrings("old-jwt", d.op.RefreshToken.old_token);
+    try expectEqualStrings("refresh-jwt", d.op.RefreshToken.refresh_token);
+    try expectEqualStrings("google", d.op.RefreshToken.provider);
+}
+
+test " AuditLog with all optional fields populated" {
+    const pkt = Packet{
+        .checksum = 26,
+        .packet_length = 0,
+        .packet_id = 26,
+        .timestamp = 26_000,
+        .op = Operation{ .AuditLog = .{
+            .event = "login.success",
+            .uid = "user@example.com",
+            .provider = "google",
+            .client_ip = "10.0.0.1",
+            .reason = "ok",
+            .timestamp = 1_700_000_000_000,
+            .app = "pizzaqsr",
+        } },
+    };
+    try roundTrip(pkt);
+    const allocator = testing.allocator;
+    var buf = try Buffer.init(allocator, pkt.calcMsgSize());
+    defer buf.deinit();
+    const serialized = try pkt.serialize(&buf);
+    const d = try Packet.deserialize(allocator, serialized);
+    defer Packet.free(allocator, d);
+    try expectEqualStrings("login.success", d.op.AuditLog.event);
+    try expectEqualStrings("user@example.com", d.op.AuditLog.uid.?);
+    try expectEqualStrings("google", d.op.AuditLog.provider.?);
+    try expectEqualStrings("10.0.0.1", d.op.AuditLog.client_ip.?);
+    try expectEqualStrings("ok", d.op.AuditLog.reason.?);
+    try expectEqual(@as(i64, 1_700_000_000_000), d.op.AuditLog.timestamp);
+    try expectEqualStrings("pizzaqsr", d.op.AuditLog.app);
+}
+
+test " AuditLog with all optional fields null" {
+    const pkt = Packet{
+        .checksum = 27,
+        .packet_length = 0,
+        .packet_id = 27,
+        .timestamp = 27_000,
+        .op = Operation{ .AuditLog = .{
+            .event = "system.start",
+            .uid = null,
+            .provider = null,
+            .client_ip = null,
+            .reason = null,
+            .timestamp = 1_700_000_000_000,
+            .app = "system",
+        } },
+    };
+    try roundTrip(pkt);
+    const allocator = testing.allocator;
+    var buf = try Buffer.init(allocator, pkt.calcMsgSize());
+    defer buf.deinit();
+    const serialized = try pkt.serialize(&buf);
+    const d = try Packet.deserialize(allocator, serialized);
+    defer Packet.free(allocator, d);
+    try expect(d.op.AuditLog.uid == null);
+    try expect(d.op.AuditLog.provider == null);
+    try expect(d.op.AuditLog.client_ip == null);
+    try expect(d.op.AuditLog.reason == null);
+}
+
+test " ShipWal" {
+    const pkt = Packet{
+        .checksum = 28,
+        .packet_length = 0,
+        .packet_id = 28,
+        .timestamp = 28_000,
+        .op = Operation{ .ShipWal = .{
+            .op_kind = 1, // insert
+            .store_ns = "orders",
+            .lsn = 12_345,
+            .doc_id = 0xdeadbeef_cafebabe_12345678_9abcdef0,
+            .timestamp = 1_700_000_000_000,
+            .data = "{\"order_id\":1}",
+        } },
+    };
+    try roundTrip(pkt);
+    const allocator = testing.allocator;
+    var buf = try Buffer.init(allocator, pkt.calcMsgSize());
+    defer buf.deinit();
+    const serialized = try pkt.serialize(&buf);
+    const d = try Packet.deserialize(allocator, serialized);
+    defer Packet.free(allocator, d);
+    try expectEqual(@as(u8, 1), d.op.ShipWal.op_kind);
+    try expectEqualStrings("orders", d.op.ShipWal.store_ns);
+    try expectEqual(@as(u64, 12_345), d.op.ShipWal.lsn);
+    try expectEqual(@as(u128, 0xdeadbeef_cafebabe_12345678_9abcdef0), d.op.ShipWal.doc_id);
+    try expectEqual(@as(i64, 1_700_000_000_000), d.op.ShipWal.timestamp);
+    try expectEqualStrings("{\"order_id\":1}", d.op.ShipWal.data);
 }
